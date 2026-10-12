@@ -138,15 +138,14 @@ def ask_llm(question: str) -> tuple:
          вызови call_huggingface(question) и поставь provider = "HuggingFace".
       3. Строку с latency и return не трогай — она уже написана.
     """
-    start = time.time()
-
-    # --- заменить этот блок на try/except (см. пункты 1-3 выше) ---
-    result = call_gigachat(question)
-    provider = "GigaChat"
-    # --- конец блока ---
-
-    latency = time.time() - start
-    return result, provider, latency
+    try:
+        result = call_gigachat(question)
+        provider = "GigaChat"
+    except Exception as e:
+        print(f"[!] GigaChat недоступен: {e}")
+        print("    Переключаюсь на резервный провайдер HuggingFace...")
+        result = call_huggingface(question)
+        provider = "HuggingFace"
 
 
 def main():
