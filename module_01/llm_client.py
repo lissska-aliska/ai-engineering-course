@@ -126,18 +126,8 @@ def call_huggingface(question: str) -> dict:
 
 
 def ask_llm(question: str) -> tuple:
-    """Задаёт вопрос модели. Возвращает (результат, имя_провайдера, latency).
+    start = time.time()
 
-    TODO 5 (Занятие 3): сейчас резерва нет — если GigaChat недоступен,
-    скрипт просто падает. Твоя задача — сделать так, чтобы при ЛЮБОЙ ошибке
-    GigaChat вопрос уходил в HuggingFace, а пользователь всё равно получал ответ.
-
-    Что нужно сделать:
-      1. Оберни вызов call_gigachat в try / except Exception as e.
-      2. В блоке except: напечатай предупреждение с текстом ошибки,
-         вызови call_huggingface(question) и поставь provider = "HuggingFace".
-      3. Строку с latency и return не трогай — она уже написана.
-    """
     try:
         result = call_gigachat(question)
         provider = "GigaChat"
@@ -146,6 +136,10 @@ def ask_llm(question: str) -> tuple:
         print("    Переключаюсь на резервный провайдер HuggingFace...")
         result = call_huggingface(question)
         provider = "HuggingFace"
+
+    latency = time.time() - start
+    return result, provider, latency
+
 
 
 def main():
