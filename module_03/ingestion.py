@@ -95,11 +95,9 @@ OVERLAP = 150
 
 def chunk_text(text: str, size: int, overlap: int) -> list:
     """Режет текст на куски по `size` символов с нахлёстом `overlap`.
-
     TODO 1: сейчас функция возвращает весь текст одним куском — это заглушка.
     С ней индекс соберётся и поиск заработает, только искать будет по целым
     записям. Насколько это плохо, увидишь в практике 2: там есть замер.
-
     Что сделать:
       1. Если overlap >= size — поднять ValueError с понятным сообщением:
          шаг окна получится нулевым, и цикл никогда не кончится.
@@ -109,12 +107,32 @@ def chunk_text(text: str, size: int, overlap: int) -> list:
          если в куске есть непробельные символы — добавить его в список;
          сдвинуть start на step.
       4. Вернуть список кусков.
-
     Проверить себя: chunk_text('абвгд'*100, 200, 50) -> 4 куска
     длиной 200, 200, 200 и 50 символов.
     """
-    return [text]
+       # 1. Проверка на "вечный цикл"
+    if overlap >= size:
+        raise ValueError(
+            f"overlap ({overlap}) должен быть меньше size ({size}): "
+            f"иначе шаг окна нулевой и нарезка зациклится"
+        )
 
+    chunks = []
+    step = size - overlap
+    start = 0
+
+    # 2. Идём по тексту окном
+    while start < len(text):
+        piece = text[start:start + size]
+        
+        # 3. Куски из одних пробелов в базу не кладём
+        if piece.strip():
+            chunks.append(piece)
+        
+        # 4. Сдвигаем окно
+        start += step
+
+    return chunks
 
 # ====================================================================
 #  КОД НИЖЕ УЖЕ РАБОТАЕТ — менять не нужно
@@ -122,12 +140,10 @@ def chunk_text(text: str, size: int, overlap: int) -> list:
 
 def chunk_id(record: dict, chunk_no: int) -> str:
     """Идентификатор чанка, который не меняется от прогона к прогону.
-
     Считается из документа, номера записи в нём, места (страница или раздел)
     и номера куска — а не из того, каким по счёту его обработали во всём
     корпусе. Иначе после правки одного документа сдвинутся id у всех
     следующих, и обновить в базе один документ станет невозможно.
-
     Номер записи в ключе обязателен, и вот почему. Названия разделов в
     сгенерированных документах повторяются: модель дважды пишет
     «Проверяемые факты», а к тому же собственная шапка документа может
@@ -138,11 +154,8 @@ def chunk_id(record: dict, chunk_no: int) -> str:
     key = (f"{record['doc_id']}|{record.get('record_no')}|{record.get('page')}"
            f"|{record.get('section')}|{chunk_no}")
     return str(uuid.uuid5(NAMESPACE, key))
-
-
 def build_chunks(records: list) -> list:
     """Режет каждую запись корпуса отдельно и переносит на чанк её метаданные.
-
     Режем именно запись, а не документ целиком: тогда чанк не может
     склеиться из двух разных страниц, и ссылка на источник остаётся точной.
     """
@@ -166,11 +179,8 @@ def build_chunks(records: list) -> list:
                 },
             })
     return chunks
-
-
 def switch_alias(client: QdrantClient, collection: str):
     """Переводит алиас на новую коллекцию одной атомарной операцией.
-
     Удаление несуществующего алиаса — не ошибка, поэтому первый запуск
     отрабатывает так же, как все последующие.
     """
@@ -179,8 +189,6 @@ def switch_alias(client: QdrantClient, collection: str):
         CreateAliasOperation(create_alias=CreateAlias(
             collection_name=collection, alias_name=ALIAS)),
     ])
-
-
 def drop_old_collections(client: QdrantClient, keep: int):
     """Убирает старые сборки индекса, оставляя последние `keep`."""
     ours = sorted(c.name for c in client.get_collections().collections
@@ -188,20 +196,16 @@ def drop_old_collections(client: QdrantClient, keep: int):
     for name in ours[:-keep]:
         client.delete_collection(name)
         print(f"    удалена старая коллекция: {name}")
-
-
 def build_index(client: QdrantClient, model: SentenceTransformer) -> tuple:
     """Собирает новую коллекцию из чанков и переключает на неё алиас."""
     records = load_records()
     chunks = build_chunks(records)
     if not chunks:
         raise RuntimeError("нарезка не дала ни одного чанка — проверь chunk_text")
-
     print(f"Записей корпуса: {len(records)}  ->  чанков: {len(chunks)}")
     print("Считаю эмбеддинги...")
     vectors = model.encode([c["payload"]["text"] for c in chunks],
                            batch_size=ENCODE_BATCH, show_progress_bar=True)
-
     collection = f"{COLLECTION_PREFIX}_{time.strftime('%Y%m%d_%H%M%S')}"
     client.create_collection(
         collection_name=collection,
@@ -210,24 +214,20 @@ def build_index(client: QdrantClient, model: SentenceTransformer) -> tuple:
             distance=Distance.COSINE,
         ),
     )
-
     # Индекс по полям, по которым будем фильтровать. Без него Qdrant при
     # фильтрации перебирает всю коллекцию — на учебном корпусе незаметно,
     # на реальном заметно сразу.
     for field in ("type", "doc_id", "equipment"):
         client.create_payload_index(collection_name=collection, field_name=field,
                                     field_schema=PayloadSchemaType.KEYWORD)
-
     client.upsert(
         collection_name=collection,
         points=[PointStruct(id=c["id"], vector=v.tolist(), payload=c["payload"])
                 for c, v in zip(chunks, vectors)],
         wait=True,
     )
-
     switch_alias(client, collection)
     drop_old_collections(client, KEEP_COLLECTIONS)
-
     manifest = {
         "alias": ALIAS,
         "collection": collection,
@@ -244,8 +244,6 @@ def build_index(client: QdrantClient, model: SentenceTransformer) -> tuple:
     MANIFEST_PATH.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
                              encoding="utf-8")
     return manifest, chunks
-
-
 def show_sample(chunks: list, count: int = 3):
     """Показывает несколько чанков так, как их увидит поиск."""
     print("\n" + "=" * 88)
@@ -257,23 +255,18 @@ def show_sample(chunks: list, count: int = 3):
         preview = " ".join(p["text"].split())[:110]
         print(f"\n  {p['doc_id']} · {where} · кусок {p['chunk_no']}")
         print(f"    {preview}…")
-
-
 def main():
     args = argparse.ArgumentParser(description="Сборка индекса чанков в Qdrant")
     args.add_argument("--embedded", action="store_true",
                       help="резервный режим без Docker (база в локальной папке)")
     args = args.parse_args()
-
     client = make_client(args.embedded, DB_PATH)
     print("Загружаю модель (первый раз — несколько минут)...")
     model = SentenceTransformer(MODEL_NAME)
-
     try:
         started = time.time()
         manifest, chunks = build_index(client, model)
         show_sample(chunks)
-
         print("\n" + "=" * 88)
         print(f"ИНДЕКС СОБРАН за {time.time() - started:.1f} с")
         print("=" * 88)
@@ -287,7 +280,5 @@ def main():
         print("\n  Дальше — поиск и оценка: python vector_store.py")
     finally:
         client.close()
-
-
 if __name__ == "__main__":
     main()
