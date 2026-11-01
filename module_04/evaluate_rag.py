@@ -29,6 +29,7 @@ import json
 import os
 import shutil
 from pathlib import Path
+from rag_assistant import ask_model
 
 from dotenv import load_dotenv
 from gigachat import GigaChat
@@ -122,7 +123,59 @@ def classify(question: dict, hits, result: dict) -> str:
 #  LLM-КАК-СУДЬЯ
 # ====================================================================
 
-def llm_judge(question: str, context: str, answer_text: str) -> dict:
+
+def llm_judge(question: str, context: str, answer: str) -> dict:
+    """Оценивает ответ RAG-системы с помощью GigaChat в роли судьи."""
+    
+    prompt = f"""Ты — независимый эксперт по оценке качества RAG-систем.
+Оцени ответ ассистента на вопрос, используя предоставленный контекст.
+
+ВОПРОС: {question}
+КОНТЕКСТ: {context}
+ОТВЕТ АССИСТЕНТА: {answer}
+
+Оцени по трем критериям:
+1. answer_relevance — отвечает ли ответ на вопрос (high/medium/low).
+2. context_relevance — подходит ли контекст к вопросу (high/medium/low).
+3. answer_faithfulness — не выдумывает ли ответ факты (high/medium/low).
+
+Верни ТОЛЬКО валидный JSON без markdown-разметки и лишних слов, строго в таком формате:
+{{
+  "answer_relevance": "high",
+  "context_relevance": "high",
+  "answer_faithfulness": "high",
+  "overall_verdict": "все хорошо",
+  "reason": "Краткое пояснение на русском языке."
+}}
+"""
+
+    try:
+        # Отправляем запрос в GigaChat (функция ask_model уже должна быть в файле)
+        # Если ask_model возвращает объект, а не строку, возможно, нужно взять .choices[0].message.content
+        messages = [{"role": "user", "content": prompt}]
+        response = ask_model(messages)
+        
+        # Очищаем ответ от возможных markdown-оберток
+        text = response.strip()
+        if text.startswith("```json"):
+            text = text[7:]
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+        
+        # Парсим JSON
+        result = json.loads(text)
+        return result
+        
+    except Exception as e:
+        # Если что-то пошло не так (ошибка сети, невалидный JSON), возвращаем заглушку
+        return {
+            "answer_relevance": "low",
+            "context_relevance": "low",
+            "answer_faithfulness": "low",
+            "overall_verdict": "ошибка вызова судьи",
+            "reason": f"Ошибка: {str(e)}"
+        }    
     """TODO 2: попросить GigaChat оценить ответ ассистента как судья.
 
     Что сделать:
@@ -294,7 +347,36 @@ def _print_judge_report(rows: list) -> None:
 #  ПЕРЕБОР CHUNK_SIZE / OVERLAP
 # ====================================================================
 
-def sweep_chunking(client, model, alias: str):
+
+def sweep_chunking(client, model, alias):
+    """Перебирает комбинации CHUNK_SIZE и OVERLAP, пересобирая индекс."""
+    import ingestion
+    
+    print(f"\n{'Размер чанка / перекрытие':<25} | {'чанков':<10} | {'✓ по разметке':<15} | {'✓ по судье':<10}")
+    print("-" * 75)
+    
+    for size, overlap in CHUNK_COMBOS:
+        ingestion.CHUNK_SIZE = size
+        ingestion.OVERLAP = overlap
+        
+        # Пересобираем индекс (возвращает manifest, игнорируем чанки)
+        manifest, _ = ingestion.build_index(client, model)
+        chunks_count = manifest["chunks"]
+        
+        # Запускаем оценку (verbose=False, чтобы не спамить в консоль)
+        counts = run_eval(client, model, alias, verbose=False)
+        
+        # Достаем правильные ответы из словаря counts
+        ok_rule = counts.get("markup", {}).get("верно", 0)
+        ok_judge = counts.get("judge", {}).get("все хорошо", 0)
+        
+        print(f"{size:<12} / {overlap:<10} | {chunks_count:<10} | {ok_rule} / 9        | {ok_judge} / 9")
+        
+    # Возвращаем стандартные параметры
+    ingestion.CHUNK_SIZE = 600
+    ingestion.OVERLAP = 150
+    ingestion.build_index(client, model)
+    print("\nПараметры возвращены к 600/150, индекс пересобран.")
     """Автоматически перебирает параметры нарезки и сравнивает качество двумя способами.
 
     Эту функцию запускают командой:  python evaluate_rag.py --sweep
@@ -341,7 +423,32 @@ def sweep_chunking(client, model, alias: str):
 #  КОНФЛИКТ ВЕРСИЙ ОДНОГО РЕГЛАМЕНТА
 # ====================================================================
 
-def resolve_conflicts(hits):
+
+def resolve_conflicts(hits) -> list:
+    """Оставляет только актуальную версию документа при конфликте версий."""
+    # Группируем по базовому doc_id (убираем суффикс -OLD)
+    groups = {}
+    for hit in hits:
+        doc_id = hit.payload.get("doc_id", "")
+        base_id = doc_id.replace("-OLD", "")
+        
+        if base_id not in groups:
+            groups[base_id] = []
+        groups[base_id].append(hit)
+        
+    result = []
+    for base_id, group in groups.items():
+        if len(group) == 1:
+            # Нет конфликта, оставляем как есть
+            result.append(group[0])
+        else:
+            # Есть конфликт: выбираем с максимальной датой
+            # Предполагаем, что дата в формате ГГГГ-ММ-ДД (строки сравниваются нормально)
+            best = max(group, key=lambda h: h.payload.get("date", ""))
+            result.append(best)
+            
+    # Возвращаем в исходном порядке (по убыванию score)
+    return sorted(result, key=lambda h: h.score, reverse=True)
     """Если в выдаче несколько версий одного регламента — оставляет свежую.
 
     TODO 4: сейчас возвращает hits без изменений — заглушка. С ней
