@@ -9,3 +9,7 @@ module_03/data/sources/ext_gost32601.pdf
 module_06/.env
 
 module_06/data/audit_log.jsonl
+
+module_06/.env
+
+module_06/data/audit_log.jsonl
