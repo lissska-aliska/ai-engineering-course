@@ -76,7 +76,10 @@ def trim_history(history: list, max_messages: int = WINDOW) -> list:
         отбрасывай его;
       * короткая история (не длиннее окна) возвращается целиком.
     """
-    raise NotImplementedError("TODO 1: скользящее окно истории")
+    trimmed = history[-max_messages:]          # срез уже создаёт новый список
+    while trimmed and isinstance(trimmed[0], AIMessage):
+        trimmed = trimmed[1:]
+    return trimmed
 
 
 # ====================================================================
@@ -91,7 +94,19 @@ def trim_history(history: list, max_messages: int = WINDOW) -> list:
 # вместо местоимений и отсылок («у него», «а для этого же оборудования»)
 # должны стоять конкретные названия и коды из истории.
 # ------------------------------------------------------------------
-CONDENSE_SYSTEM = ""
+CONDENSE_SYSTEM = (
+    "Ты — звено переформулировки вопросов в диалоге технической поддержки.\n"
+    "На вход приходят история диалога и последний вопрос инженера.\n"
+    "Перепиши последний вопрос так, чтобы он был понятен БЕЗ истории: "
+    "замени местоимения и отсылки («у него», «этого насоса», «таких случаев», "
+    "«а для него») на конкретные названия, коды и характеристики из истории.\n\n"
+    "Правила:\n"
+    "1. Верни ТОЛЬКО переформулированный вопрос — одну строку.\n"
+    "2. Никаких пояснений, вступлений, кавычек, меток вида «Вопрос:».\n"
+    "3. Если вопрос уже самостоятельный — верни его без изменений.\n"
+    "4. Не отвечай на вопрос и не добавляй новую информацию — только переформулируй.\n"
+    "5. Сохраняй язык исходного вопроса."
+)
 
 CONDENSE_PROMPT = ChatPromptTemplate.from_messages([
     ("system", CONDENSE_SYSTEM),
@@ -105,12 +120,13 @@ def build_condense_chain(model):
 
     TODO 3. Собери цепочку из CONDENSE_PROMPT, модели и StrOutputParser().
     """
-    raise NotImplementedError("TODO 3: цепочка переформулировки")
+    return CONDENSE_PROMPT | model | StrOutputParser()
 
 
 # ====================================================================
 #  ДИАЛОГОВЫЙ ШАГ: переформулировка (если есть история) + поиск
 # ====================================================================
+
 
 def dialog_step(question: str, history: list, model) -> dict:
     """Один шаг диалога. Возвращает {"answer", "sources", "standalone"}.
@@ -123,8 +139,21 @@ def dialog_step(question: str, history: list, model) -> dict:
       * отправь самостоятельный вопрос в rag_answer(...) и верни
         {"answer": ..., "sources": ..., "standalone": самостоятельный вопрос}.
     """
-    raise NotImplementedError("TODO 4: шаг диалога")
+    if not history:
+        standalone = question
+    else:
+        condense = build_condense_chain(model)
+        standalone = condense.invoke({
+            "history": trim_history(history),
+            "question": question,
+        }).strip()
 
+    result = rag_answer(standalone)
+    return {
+        "answer": result["answer"],
+        "sources": result["sources"],
+        "standalone": standalone,
+    }        
 
 def run_dialog():
     llm = make_llm()
