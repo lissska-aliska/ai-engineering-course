@@ -1,0 +1,10 @@
+[
+  {
+    "id": "a58a949a",
+    "equipment_id": "SEP-04",
+    "description": "растёт вибрация на SEP-04, приоритет высокий",
+    "priority": "high",
+    "status": "open",
+    "created_at": "2026-11-13T16:52:05.842547+00:00"
+  }
+]
